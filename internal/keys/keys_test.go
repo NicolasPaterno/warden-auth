@@ -1,6 +1,7 @@
 package keys_test
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -22,21 +23,34 @@ func testPEM(t *testing.T) []byte {
 
 func TestLoad(t *testing.T) {
 	set, err := keys.Load(testPEM(t))
-	_ = set
-	_ = err
-	t.Skip("implement assertions")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if set.Private() == nil {
+		t.Fatal("private key is nil")
+	}
 }
 
 func TestLoad_StableKID(t *testing.T) {
 	pemBytes := testPEM(t)
-	_ = pemBytes
-	t.Skip("implement assertions")
+	a, err := keys.Load(pemBytes)
+	if err != nil {
+		t.Fatalf("load a: %v", err)
+	}
+	b, err := keys.Load(pemBytes)
+	if err != nil {
+		t.Fatalf("load b: %v", err)
+	}
+	if a.KID() != b.KID() {
+		t.Fatalf("kid not stable: %q != %q", a.KID(), b.KID())
+	}
 }
 
 func TestLoad_InvalidPEM(t *testing.T) {
 	_, err := keys.Load([]byte("not a pem"))
-	_ = err
-	t.Skip("implement assertions")
+	if err == nil {
+		t.Fatal("expected error for invalid pem")
+	}
 }
 
 func TestJWKS(t *testing.T) {
@@ -45,7 +59,13 @@ func TestJWKS(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 	jwks, err := set.JWKS()
-	_ = jwks
-	_ = err
-	t.Skip("implement assertions")
+	if err != nil {
+		t.Fatalf("jwks: %v", err)
+	}
+	if len(jwks) == 0 {
+		t.Fatal("jwks is empty")
+	}
+	if !bytes.Contains(jwks, []byte(set.KID())) {
+		t.Fatal("jwks missing kid")
+	}
 }

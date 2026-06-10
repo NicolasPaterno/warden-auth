@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 
@@ -34,8 +35,12 @@ func Load(pemBytes []byte) (*Set, error) {
 		return nil, err
 	}
 	kid := base64.RawURLEncoding.EncodeToString(tp)
-
-	return &Set{priv: key, kid: kid, jwks: nil}, nil
+	jwk.KeyID = kid
+	jwks, err := json.Marshal(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{jwk}})
+	if err != nil {
+		return nil, err
+	}
+	return &Set{priv: key, kid: kid, jwks: jwks}, nil
 }
 
 func (s *Set) Private() *rsa.PrivateKey {
