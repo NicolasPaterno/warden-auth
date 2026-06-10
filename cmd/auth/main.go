@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/NicolasPaterno/warden-auth/internal/config"
 	httptransport "github.com/NicolasPaterno/warden-auth/internal/http"
@@ -56,6 +57,24 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
+
+	opt, err := redis.ParseURL(cfg.RedisURL)
+	if err != nil {
+		slog.Error("failed to parse redis url", "error", err)
+		os.Exit(1)
+	}
+	rdb := redis.NewClient(opt)
+
+	defer func() {
+		if err := rdb.Close(); err != nil {
+			slog.Error("failed to close redis client", "error", err)
+		}
+	}()
+
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		slog.Error("failed to connect to redis", "error", err)
+		os.Exit(1)
+	}
 
 	userRepo := postgres.NewUserRepo(pool)
 	authService := service.New(keySet, userRepo, cfg.Issuer, cfg.Audience)

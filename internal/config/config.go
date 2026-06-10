@@ -8,6 +8,7 @@ type Config struct {
 	PrivateKeyPath string
 	Issuer         string
 	Audience       string
+	RedisURL       string
 }
 
 func Load() Config {
@@ -17,6 +18,7 @@ func Load() Config {
 		PrivateKeyPath: getEnv("PRIVATE_KEY_PATH", "dev-private.pem"),
 		Issuer:         getEnv("ISSUER", "warden-auth"),
 		Audience:       getEnv("AUDIENCE", "warden-engine"),
+		RedisURL:       getEnv("REDIS_URL", "localhost:6379"),
 	}
 }
 
