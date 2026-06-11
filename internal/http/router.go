@@ -34,5 +34,8 @@ func NewRouter(service auth.Service, jwks []byte, limiter *redis_rate.Limiter, h
 	r.With(rateLimitByIP(limiter, "login", redis_rate.PerMinute(10))).Post("/login", router.handleLogin)
 	r.Post("/refresh", router.handleRefresh)
 
+	r.With(rateLimitByIP(limiter, "token", redis_rate.PerMinute(10))).Post("/token", router.handleToken)
+	r.With(rateLimitByIP(limiter, "exchange", redis_rate.PerMinute(10))).Post("/token/exchange", router.handleExchange)
+
 	return r
 }

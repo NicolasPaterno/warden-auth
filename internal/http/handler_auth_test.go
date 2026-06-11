@@ -32,11 +32,15 @@ type fakeAuthService struct {
 	loginErr    error
 	access      string
 	refreshErr  error
+	serviceTok  string
+	tokenErr    error
+	exchangeTok string
+	exchangeErr error
 	gotEmail    string
 	gotPassword string
 }
 
-func (f *fakeAuthService) Register(_ context.Context, email, password string) (auth.User, error) {
+func (f *fakeAuthService) Register(_ context.Context, email, password, _ string) (auth.User, error) {
 	f.gotEmail, f.gotPassword = email, password
 	return f.user, f.registerErr
 }
@@ -50,12 +54,22 @@ func (f *fakeAuthService) Refresh(_ context.Context, _ string) (string, error) {
 	return f.access, f.refreshErr
 }
 
+func (f *fakeAuthService) Token(_ context.Context, _, _, _ string) (string, error) {
+	return f.serviceTok, f.tokenErr
+}
+
+func (f *fakeAuthService) Exchange(_ context.Context, _, _, _, _ string) (string, error) {
+	return f.exchangeTok, f.exchangeErr
+}
+
 func newTestRouter(t *testing.T, svc auth.Service) http.Handler {
 	router := &Router{service: svc, limiter: newTestLimiter(t)}
 	r := chi.NewRouter()
 	r.Post("/register", router.handleRegister)
 	r.Post("/login", router.handleLogin)
 	r.Post("/refresh", router.handleRefresh)
+	r.Post("/token", router.handleToken)
+	r.Post("/token/exchange", router.handleExchange)
 	return r
 }
 
@@ -180,6 +194,85 @@ func TestHandleRefresh(t *testing.T) {
 
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("status = %d, want 401", rec.Code)
+		}
+	})
+}
+
+func TestHandleToken(t *testing.T) {
+	t.Run("valid client credentials return 200 with a bearer token", func(t *testing.T) {
+		svc := &fakeAuthService{serviceTok: "svc-token"}
+		rec := doRequest(t, newTestRouter(t, svc), http.MethodPost, "/token", `{"client_id":"brain","client_secret":"s3cret","audience":"warden-engine"}`)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+		}
+		var got serviceTokenResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("response is not valid serviceTokenResponse JSON: %v", err)
+		}
+		if got.AccessToken != "svc-token" || got.TokenType != "Bearer" {
+			t.Fatalf("body = %+v", got)
+		}
+	})
+
+	t.Run("bad client credentials return 401", func(t *testing.T) {
+		svc := &fakeAuthService{tokenErr: auth.ErrUnauthorized}
+		rec := doRequest(t, newTestRouter(t, svc), http.MethodPost, "/token", `{"client_id":"brain","client_secret":"wrong","audience":"warden-engine"}`)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", rec.Code)
+		}
+	})
+
+	t.Run("disallowed audience returns 400", func(t *testing.T) {
+		svc := &fakeAuthService{tokenErr: auth.ErrInvalid}
+		rec := doRequest(t, newTestRouter(t, svc), http.MethodPost, "/token", `{"client_id":"brain","client_secret":"s3cret","audience":"warden-foo"}`)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", rec.Code)
+		}
+	})
+
+	t.Run("malformed JSON returns 400", func(t *testing.T) {
+		rec := doRequest(t, newTestRouter(t, &fakeAuthService{}), http.MethodPost, "/token", "{not json")
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", rec.Code)
+		}
+	})
+}
+
+func TestHandleExchange(t *testing.T) {
+	t.Run("valid exchange returns 200 with a bearer token", func(t *testing.T) {
+		svc := &fakeAuthService{exchangeTok: "exchanged"}
+		rec := doRequest(t, newTestRouter(t, svc), http.MethodPost, "/token/exchange", `{"client_id":"brain","client_secret":"s3cret","subject_token":"user-access","audience":"warden-engine"}`)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+		}
+		var got serviceTokenResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("response is not valid serviceTokenResponse JSON: %v", err)
+		}
+		if got.AccessToken != "exchanged" || got.TokenType != "Bearer" {
+			t.Fatalf("body = %+v", got)
+		}
+	})
+
+	t.Run("invalid subject token returns 401", func(t *testing.T) {
+		svc := &fakeAuthService{exchangeErr: auth.ErrUnauthorized}
+		rec := doRequest(t, newTestRouter(t, svc), http.MethodPost, "/token/exchange", `{"client_id":"brain","client_secret":"s3cret","subject_token":"bad","audience":"warden-engine"}`)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", rec.Code)
+		}
+	})
+
+	t.Run("malformed JSON returns 400", func(t *testing.T) {
+		rec := doRequest(t, newTestRouter(t, &fakeAuthService{}), http.MethodPost, "/token/exchange", "{not json")
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", rec.Code)
 		}
 	})
 }
