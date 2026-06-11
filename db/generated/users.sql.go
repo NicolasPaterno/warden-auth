@@ -12,15 +12,16 @@ import (
 )
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO users (id, email, password_hash, created_at)
-VALUES ($1, $2, $3, $4)
-    RETURNING id, email, password_hash, created_at
+INSERT INTO users (id, email, password_hash, tenant_id, created_at)
+VALUES ($1, $2, $3, $4, $5)
+    RETURNING id, email, password_hash, created_at, tenant_id
 `
 
 type CreateUserParams struct {
 	ID           string             `json:"id"`
 	Email        string             `json:"email"`
 	PasswordHash string             `json:"password_hash"`
+	TenantID     string             `json:"tenant_id"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
@@ -29,6 +30,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		arg.ID,
 		arg.Email,
 		arg.PasswordHash,
+		arg.TenantID,
 		arg.CreatedAt,
 	)
 	var i User
@@ -37,12 +39,13 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, created_at FROM users WHERE email = $1
+SELECT id, email, password_hash, created_at, tenant_id FROM users WHERE email = $1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -53,6 +56,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }

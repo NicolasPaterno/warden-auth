@@ -40,6 +40,7 @@ func (r *UserRepo) Create(ctx context.Context, u auth.User) error {
 		ID:           u.ID,
 		Email:        u.Email,
 		PasswordHash: u.PasswordHash,
+		TenantID:     u.TenantID,
 		CreatedAt:    pgtype.Timestamptz{Time: time.Now(), Valid: true},
 	})
 	if err != nil {
@@ -56,6 +57,7 @@ func toAuthUser(u db.User) auth.User {
 	return auth.User{
 		ID:           u.ID,
 		Email:        u.Email,
+		TenantID:     u.TenantID,
 		PasswordHash: u.PasswordHash,
 	}
 }
