@@ -1,0 +1,109 @@
+name: CI Auth
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    name: Lint, Test & Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/cache@v4
+        id: golangci-cache
+        with:
+          path: ~/go/bin/golangci-lint
+          key: golangci-lint-${{ runner.os }}-${{ hashFiles('go.mod') }}
+
+      - name: Install golangci-lint
+        if: steps.golangci-cache.outputs.cache-hit != 'true'
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+      - name: Lint
+        run: golangci-lint run ./...
+
+      - name: Test
+        run: go test ./... -race
+
+      - name: Build
+        run: go build -o auth ./cmd/auth/main.go
+
+  docker:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: ci
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image name
+        id: image
+        run: |
+          IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          echo "name=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_NAME=${IMAGE}" >> "$GITHUB_ENV"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:latest
+
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    needs: docker
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+    env:
+      IMAGE: ${{ needs.docker.outputs.image }}
+      K8S_NS: warden
+    steps:
+      - name: Checkout warden-infra
+        uses: actions/checkout@v4
+        with:
+          repository: NicolasPaterno/warden-infra
+          path: warden-infra
+
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Run database migrations
+        run: |
+          kubectl apply -f warden-infra/k8s/auth/migrations-configmap.yml
+          kubectl delete job auth-migrate -n $K8S_NS --ignore-not-found
+          kubectl apply -f warden-infra/k8s/auth/migrations-job.yml
+          kubectl wait --for=condition=complete job/auth-migrate \
+            -n $K8S_NS --timeout=120s
+
+      - name: Deploy auth
+        run: |
+          kubectl set image deployment/warden-auth \
+            auth=${{ env.IMAGE }}:${{ github.sha }} \
+            -n $K8S_NS
+          kubectl rollout status deployment/warden-auth \
+            -n $K8S_NS --timeout=120s
