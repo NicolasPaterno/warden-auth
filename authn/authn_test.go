@@ -175,6 +175,46 @@ func TestVerifyCachesJWKS(t *testing.T) {
 	}
 }
 
+func TestVerifyWithScopes(t *testing.T) {
+	key := testKey(t)
+	srv := jwksServer(t, testKID, &key.PublicKey, nil)
+	v := New(srv.URL, testIssuer, testAudience, WithScopes("access", "service"))
+
+	serviceClaims := baseClaims()
+	serviceClaims.Subject = "brain"
+	serviceClaims.Scope = "service"
+
+	if _, err := v.Verify(t.Context(), signRS256(t, key, testKID, serviceClaims)); err != nil {
+		t.Fatalf("service scope rejected: %v", err)
+	}
+	if _, err := v.Verify(t.Context(), signRS256(t, key, testKID, baseClaims())); err != nil {
+		t.Fatalf("access scope rejected: %v", err)
+	}
+
+	unknown := baseClaims()
+	unknown.Scope = "refresh"
+	if _, err := v.Verify(t.Context(), signRS256(t, key, testKID, unknown)); err == nil {
+		t.Fatal("Verify accepted a scope not in the allowed set")
+	}
+}
+
+func TestVerifyExposesAct(t *testing.T) {
+	key := testKey(t)
+	srv := jwksServer(t, testKID, &key.PublicKey, nil)
+	v := New(srv.URL, testIssuer, testAudience)
+
+	delegated := baseClaims()
+	delegated.Act = &auth.Actor{Subject: "brain"}
+
+	claims, err := v.Verify(t.Context(), signRS256(t, key, testKID, delegated))
+	if err != nil {
+		t.Fatalf("Verify returned error: %v", err)
+	}
+	if claims.Act == nil || claims.Act.Subject != "brain" {
+		t.Fatalf("act = %+v, want {sub: brain}", claims.Act)
+	}
+}
+
 func TestMiddleware(t *testing.T) {
 	key := testKey(t)
 	srv := jwksServer(t, testKID, &key.PublicKey, nil)

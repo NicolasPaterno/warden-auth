@@ -20,7 +20,7 @@ type Verifier struct {
 	jwksURL    string
 	issuer     string
 	audience   string
-	scope      string
+	scopes     map[string]bool
 	httpClient *http.Client
 	ttl        time.Duration
 	minRefresh time.Duration
@@ -36,7 +36,19 @@ type Verifier struct {
 type Option func(*Verifier)
 
 func WithScope(scope string) Option {
-	return func(v *Verifier) { v.scope = scope }
+	return WithScopes(scope)
+}
+
+func WithScopes(scopes ...string) Option {
+	return func(v *Verifier) {
+		set := make(map[string]bool, len(scopes))
+		for _, s := range scopes {
+			if s != "" {
+				set[s] = true
+			}
+		}
+		v.scopes = set
+	}
 }
 
 func WithHTTPClient(c *http.Client) Option {
@@ -52,7 +64,7 @@ func New(jwksURL, issuer, audience string, opts ...Option) *Verifier {
 		jwksURL:    jwksURL,
 		issuer:     issuer,
 		audience:   audience,
-		scope:      "access",
+		scopes:     map[string]bool{"access": true},
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 		ttl:        5 * time.Minute,
 		minRefresh: time.Minute,
@@ -78,7 +90,7 @@ func (v *Verifier) Verify(ctx context.Context, token string) (*auth.Claims, erro
 	if err != nil {
 		return nil, err
 	}
-	if v.scope != "" && claims.Scope != v.scope {
+	if len(v.scopes) > 0 && !v.scopes[claims.Scope] {
 		return nil, fmt.Errorf("verifier: unexpected scope %q", claims.Scope)
 	}
 	return claims, nil
