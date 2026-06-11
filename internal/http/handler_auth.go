@@ -1,6 +1,11 @@
 package http
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+
+	"github.com/go-redis/redis_rate/v10"
+)
 
 func (router *Router) handleRegister(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -22,6 +27,10 @@ func (router *Router) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	var req loginRequest
 	if !decodeJSON(w, r, &req) {
+		return
+	}
+	emailKey := "login:email:" + strings.ToLower(req.Email)
+	if !allow(w, r, router.limiter, emailKey, redis_rate.PerMinute(5)) {
 		return
 	}
 	pair, err := router.service.Login(ctx, req.Email, req.Password)

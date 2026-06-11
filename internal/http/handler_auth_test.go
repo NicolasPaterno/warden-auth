@@ -9,10 +9,21 @@ import (
 	"testing"
 
 	auth "github.com/NicolasPaterno/warden-auth"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/go-chi/chi/v5"
+	"github.com/go-redis/redis_rate/v10"
+	"github.com/redis/go-redis/v9"
 )
 
-// fakeAuthService is an in-memory auth.AuthService for handler tests. Each field
+func newTestLimiter(t *testing.T) *redis_rate.Limiter {
+	t.Helper()
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	return redis_rate.NewLimiter(rdb)
+}
+
+// fakeAuthService is an in-memory auth.Service for handler tests. Each field
 // forces the outcome of one method.
 type fakeAuthService struct {
 	user        auth.User
@@ -39,8 +50,8 @@ func (f *fakeAuthService) Refresh(_ context.Context, _ string) (string, error) {
 	return f.access, f.refreshErr
 }
 
-func newTestRouter(svc auth.AuthService) http.Handler {
-	router := &Router{service: svc}
+func newTestRouter(t *testing.T, svc auth.Service) http.Handler {
+	router := &Router{service: svc, limiter: newTestLimiter(t)}
 	r := chi.NewRouter()
 	r.Post("/register", router.handleRegister)
 	r.Post("/login", router.handleLogin)
@@ -64,7 +75,7 @@ func doRequest(t *testing.T, h http.Handler, method, target, body string) *httpt
 func TestHandleRegister(t *testing.T) {
 	t.Run("valid body returns 201 with id and email, no hash", func(t *testing.T) {
 		svc := &fakeAuthService{user: auth.User{ID: "u-1", Email: "a@b.com"}}
-		rec := doRequest(t, newTestRouter(svc), http.MethodPost, "/register", `{"email":"a@b.com","password":"s3cretpw"}`)
+		rec := doRequest(t, newTestRouter(t, svc), http.MethodPost, "/register", `{"email":"a@b.com","password":"s3cretpw"}`)
 
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("status = %d, want 201; body: %s", rec.Code, rec.Body.String())
@@ -83,7 +94,7 @@ func TestHandleRegister(t *testing.T) {
 
 	t.Run("duplicate email returns 409", func(t *testing.T) {
 		svc := &fakeAuthService{registerErr: auth.ErrConflict}
-		rec := doRequest(t, newTestRouter(svc), http.MethodPost, "/register", `{"email":"a@b.com","password":"s3cretpw"}`)
+		rec := doRequest(t, newTestRouter(t, svc), http.MethodPost, "/register", `{"email":"a@b.com","password":"s3cretpw"}`)
 
 		if rec.Code != http.StatusConflict {
 			t.Fatalf("status = %d, want 409", rec.Code)
@@ -92,7 +103,7 @@ func TestHandleRegister(t *testing.T) {
 
 	t.Run("invalid input returns 400", func(t *testing.T) {
 		svc := &fakeAuthService{registerErr: auth.ErrInvalid}
-		rec := doRequest(t, newTestRouter(svc), http.MethodPost, "/register", `{"email":"x","password":"short"}`)
+		rec := doRequest(t, newTestRouter(t, svc), http.MethodPost, "/register", `{"email":"x","password":"short"}`)
 
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400", rec.Code)
@@ -100,7 +111,7 @@ func TestHandleRegister(t *testing.T) {
 	})
 
 	t.Run("malformed JSON returns 400", func(t *testing.T) {
-		rec := doRequest(t, newTestRouter(&fakeAuthService{}), http.MethodPost, "/register", "{not json")
+		rec := doRequest(t, newTestRouter(t, &fakeAuthService{}), http.MethodPost, "/register", "{not json")
 
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400", rec.Code)
@@ -111,7 +122,7 @@ func TestHandleRegister(t *testing.T) {
 func TestHandleLogin(t *testing.T) {
 	t.Run("valid credentials return 200 with both tokens", func(t *testing.T) {
 		svc := &fakeAuthService{pair: auth.TokenPair{AccessToken: "acc", RefreshToken: "ref"}}
-		rec := doRequest(t, newTestRouter(svc), http.MethodPost, "/login", `{"email":"a@b.com","password":"s3cret"}`)
+		rec := doRequest(t, newTestRouter(t, svc), http.MethodPost, "/login", `{"email":"a@b.com","password":"s3cret"}`)
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
@@ -130,7 +141,7 @@ func TestHandleLogin(t *testing.T) {
 
 	t.Run("bad credentials return 401", func(t *testing.T) {
 		svc := &fakeAuthService{loginErr: auth.ErrUnauthorized}
-		rec := doRequest(t, newTestRouter(svc), http.MethodPost, "/login", `{"email":"a@b.com","password":"wrong"}`)
+		rec := doRequest(t, newTestRouter(t, svc), http.MethodPost, "/login", `{"email":"a@b.com","password":"wrong"}`)
 
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("status = %d, want 401", rec.Code)
@@ -138,7 +149,7 @@ func TestHandleLogin(t *testing.T) {
 	})
 
 	t.Run("malformed JSON returns 400", func(t *testing.T) {
-		rec := doRequest(t, newTestRouter(&fakeAuthService{}), http.MethodPost, "/login", "{not json")
+		rec := doRequest(t, newTestRouter(t, &fakeAuthService{}), http.MethodPost, "/login", "{not json")
 
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400", rec.Code)
@@ -149,7 +160,7 @@ func TestHandleLogin(t *testing.T) {
 func TestHandleRefresh(t *testing.T) {
 	t.Run("valid refresh token returns 200 with a new access token", func(t *testing.T) {
 		svc := &fakeAuthService{access: "new-access"}
-		rec := doRequest(t, newTestRouter(svc), http.MethodPost, "/refresh", `{"refresh_token":"ref"}`)
+		rec := doRequest(t, newTestRouter(t, svc), http.MethodPost, "/refresh", `{"refresh_token":"ref"}`)
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
@@ -165,7 +176,7 @@ func TestHandleRefresh(t *testing.T) {
 
 	t.Run("invalid refresh token returns 401", func(t *testing.T) {
 		svc := &fakeAuthService{refreshErr: auth.ErrUnauthorized}
-		rec := doRequest(t, newTestRouter(svc), http.MethodPost, "/refresh", `{"refresh_token":"bad"}`)
+		rec := doRequest(t, newTestRouter(t, svc), http.MethodPost, "/refresh", `{"refresh_token":"bad"}`)
 
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("status = %d, want 401", rec.Code)
