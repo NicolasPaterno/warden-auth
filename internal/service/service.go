@@ -15,7 +15,7 @@ import (
 
 const minPasswordLen = 8
 
-var _ auth.AuthService = (*Service)(nil)
+var _ auth.Service = (*Service)(nil)
 
 type Service struct {
 	keys       *keys.Set
