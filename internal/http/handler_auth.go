@@ -14,7 +14,7 @@ func (router *Router) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	user, err := router.service.Register(ctx, req.Email, req.Password)
+	user, err := router.service.Register(ctx, req.Email, req.Password, req.Tenant)
 	if err != nil {
 		writeError(ctx, w, err)
 		return
@@ -54,4 +54,34 @@ func (router *Router) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(ctx, w, http.StatusOK, newAccessTokenResponse(access))
+}
+
+func (router *Router) handleToken(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var req tokenRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	token, err := router.service.Token(ctx, req.ClientID, req.ClientSecret, req.Audience)
+	if err != nil {
+		writeError(ctx, w, err)
+		return
+	}
+	respondJSON(ctx, w, http.StatusOK, newServiceTokenResponse(token))
+}
+
+func (router *Router) handleExchange(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var req exchangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	token, err := router.service.Exchange(ctx, req.ClientID, req.ClientSecret, req.SubjectToken, req.Audience)
+	if err != nil {
+		writeError(ctx, w, err)
+		return
+	}
+	respondJSON(ctx, w, http.StatusOK, newServiceTokenResponse(token))
 }

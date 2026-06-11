@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/subtle"
 	"net/mail"
 	"time"
 
@@ -13,7 +14,10 @@ import (
 	pwd "github.com/NicolasPaterno/warden-auth/internal/password"
 )
 
-const minPasswordLen = 8
+const (
+	minPasswordLen = 8
+	defaultTenant  = "default"
+)
 
 var _ auth.Service = (*Service)(nil)
 
@@ -21,28 +25,35 @@ type Service struct {
 	keys       *keys.Set
 	users      auth.UserRepository
 	issuer     string
-	audience   string
+	audience   []string
+	clients    map[string]string
+	audiences  map[string]bool
 	accessTTL  time.Duration
 	refreshTTL time.Duration
 }
 
-func New(k *keys.Set, users auth.UserRepository, issuer, audience string) *Service {
+func New(k *keys.Set, users auth.UserRepository, issuer string, audience []string, clients map[string]string, audiences map[string]bool) *Service {
 	return &Service{
 		keys:       k,
 		users:      users,
 		issuer:     issuer,
 		audience:   audience,
+		clients:    clients,
+		audiences:  audiences,
 		accessTTL:  15 * time.Minute,
 		refreshTTL: 30 * 24 * time.Hour,
 	}
 }
 
-func (s *Service) Register(ctx context.Context, email, password string) (auth.User, error) {
+func (s *Service) Register(ctx context.Context, email, password, tenant string) (auth.User, error) {
 	if _, err := mail.ParseAddress(email); err != nil {
 		return auth.User{}, auth.ErrInvalid
 	}
 	if len(password) < minPasswordLen {
 		return auth.User{}, auth.ErrInvalid
+	}
+	if tenant == "" {
+		tenant = defaultTenant
 	}
 
 	hash, err := pwd.Hash(password)
@@ -53,6 +64,7 @@ func (s *Service) Register(ctx context.Context, email, password string) (auth.Us
 	user := auth.User{
 		ID:           uuid.NewString(),
 		Email:        email,
+		TenantID:     tenant,
 		PasswordHash: hash,
 	}
 	if err := s.users.Create(ctx, user); err != nil {
@@ -78,11 +90,11 @@ func (s *Service) Login(ctx context.Context, email, password string) (auth.Token
 }
 
 func (s *Service) Issue(user auth.User) (auth.TokenPair, error) {
-	access, err := s.sign(user, s.accessTTL, "access")
+	access, err := s.sign(user.ID, s.audience, s.accessTTL, "access", user.TenantID, nil)
 	if err != nil {
 		return auth.TokenPair{}, err
 	}
-	refresh, err := s.sign(user, s.refreshTTL, "refresh")
+	refresh, err := s.sign(user.ID, s.audience, s.refreshTTL, "refresh", user.TenantID, nil)
 	if err != nil {
 		return auth.TokenPair{}, err
 	}
@@ -90,33 +102,73 @@ func (s *Service) Issue(user auth.User) (auth.TokenPair, error) {
 }
 
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (string, error) {
-	var claims auth.Claims
-	token, err := jwt.ParseWithClaims(refreshToken, &claims, func(t *jwt.Token) (any, error) {
-		return &s.keys.Private().PublicKey, nil
-	})
-	if err != nil || !token.Valid {
+	claims, err := s.parse(refreshToken)
+	if err != nil {
 		return "", auth.ErrUnauthorized
 	}
-
 	if claims.Scope != "refresh" {
 		return "", auth.ErrUnauthorized
 	}
-	user := auth.User{ID: claims.Subject}
-	return s.sign(user, s.accessTTL, "access")
+	return s.sign(claims.Subject, s.audience, s.accessTTL, "access", claims.Tenant, nil)
 }
 
-func (s *Service) sign(user auth.User, ttl time.Duration, scope string) (string, error) {
+func (s *Service) Token(ctx context.Context, clientID, clientSecret, audience string) (string, error) {
+	if err := s.authClient(clientID, clientSecret); err != nil {
+		return "", err
+	}
+	if !s.audiences[audience] {
+		return "", auth.ErrInvalid
+	}
+	return s.sign(clientID, []string{audience}, s.accessTTL, "service", "", nil)
+}
+
+func (s *Service) Exchange(ctx context.Context, clientID, clientSecret, subjectToken, audience string) (string, error) {
+	if err := s.authClient(clientID, clientSecret); err != nil {
+		return "", err
+	}
+	if !s.audiences[audience] {
+		return "", auth.ErrInvalid
+	}
+	claims, err := s.parse(subjectToken)
+	if err != nil || claims.Scope != "access" {
+		return "", auth.ErrUnauthorized
+	}
+	return s.sign(claims.Subject, []string{audience}, s.accessTTL, "access", claims.Tenant, &auth.Actor{Subject: clientID})
+}
+
+func (s *Service) authClient(clientID, clientSecret string) error {
+	secret, ok := s.clients[clientID]
+	if !ok || subtle.ConstantTimeCompare([]byte(secret), []byte(clientSecret)) != 1 {
+		return auth.ErrUnauthorized
+	}
+	return nil
+}
+
+func (s *Service) parse(token string) (auth.Claims, error) {
+	var claims auth.Claims
+	parsed, err := jwt.ParseWithClaims(token, &claims, func(t *jwt.Token) (any, error) {
+		return &s.keys.Private().PublicKey, nil
+	}, jwt.WithValidMethods([]string{"RS256"}))
+	if err != nil || !parsed.Valid {
+		return auth.Claims{}, err
+	}
+	return claims, nil
+}
+
+func (s *Service) sign(subject string, audience []string, ttl time.Duration, scope, tenant string, act *auth.Actor) (string, error) {
 	now := time.Now()
 
 	claims := auth.Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
-			Subject:   user.ID,
+			Subject:   subject,
 			Issuer:    s.issuer,
-			Audience:  jwt.ClaimStrings{s.audience},
+			Audience:  jwt.ClaimStrings(audience),
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
 		},
-		Scope: scope,
+		Scope:  scope,
+		Tenant: tenant,
+		Act:    act,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = s.keys.KID()
