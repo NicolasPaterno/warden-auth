@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-redis/redis_rate/v10"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
@@ -76,11 +77,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	limiter := redis_rate.NewLimiter(rdb)
+
 	userRepo := postgres.NewUserRepo(pool)
 	authService := service.New(keySet, userRepo, cfg.Issuer, cfg.Audience)
 
 	healthHandler := httptransport.NewHealthHandler(pool)
-	router := httptransport.NewRouter(authService, jwks, healthHandler)
+	router := httptransport.NewRouter(authService, jwks, limiter, healthHandler)
 	server := &http.Server{Addr: cfg.HTTPPort, Handler: router}
 
 	go func() {
