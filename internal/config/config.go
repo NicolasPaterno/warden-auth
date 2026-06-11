@@ -23,7 +23,7 @@ func Load() Config {
 		PrivateKeyPath:   getEnv("PRIVATE_KEY_PATH", "dev-private.pem"),
 		Issuer:           getEnv("ISSUER", "warden-auth"),
 		Audience:         parseList(getEnv("AUDIENCE", "warden-engine,warden-gateway")),
-		RedisURL:         getEnv("REDIS_URL", "localhost:6379"),
+		RedisURL:         getEnv("REDIS_URL", "redis://localhost:6379"),
 		ServiceClients:   parseClients(getEnv("SERVICE_CLIENTS", "")),
 		ServiceAudiences: parseSet(getEnv("SERVICE_AUDIENCES", "")),
 	}
