@@ -80,7 +80,7 @@ func main() {
 	limiter := redis_rate.NewLimiter(rdb)
 
 	userRepo := postgres.NewUserRepo(pool)
-	authService := service.New(keySet, userRepo, cfg.Issuer, cfg.Audience)
+	authService := service.New(keySet, userRepo, cfg.Issuer, cfg.Audience, cfg.ServiceClients, cfg.ServiceAudiences)
 
 	healthHandler := httptransport.NewHealthHandler(pool)
 	router := httptransport.NewRouter(authService, jwks, limiter, healthHandler)
